@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>手掌地球仪</title>
+<style>
+  :root {
+    --bg: #02040a;
+    --panel: rgba(12, 18, 32, 0.72);
+    --border: rgba(120, 170, 255, 0.22);
+    --text: #e6eefc;
+    --muted: #8fa3c4;
+    --accent: #5fb4ff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }
+  #scene { position: fixed; inset: 0; display: block; cursor: grab; touch-action: none; }
+  #scene:active { cursor: grabbing; }
+
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+
+  #hud { top: 16px; left: 16px; padding: 14px 16px; width: 280px; max-width: calc(100vw - 32px); }
+  #hud h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+  #hud p { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+  .legend li { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 8px; transition: background .2s; }
+  .legend li.active { background: rgba(95, 180, 255, 0.18); }
+  .legend .ico { width: 24px; text-align: center; font-size: 16px; }
+  .legend .tip { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+  #startBtn { margin-top: 12px; width: 100%; padding: 10px; border: 0; border-radius: 10px; cursor: pointer;
+    background: linear-gradient(135deg, #3b82f6, #22d3ee); color: #fff; font-size: 14px; font-weight: 600; }
+  #startBtn:disabled { opacity: .6; cursor: default; }
+
+  #status { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); padding: 8px 14px;
+    font-size: 13px; white-space: nowrap; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px); }
+  #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  #status.ok .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  #status.warn .dot { background: var(--warn); }
+  #statusText { overflow: hidden; text-overflow: ellipsis; }
+
+  #cam { bottom: 16px; right: 16px; width: 240px; aspect-ratio: 4 / 3; overflow: hidden; padding: 0; display: none; }
+  #cam video, #cam canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #cam video { opacity: .55; }
+
+  #info { top: 16px; right: 16px; padding: 10px 14px; font-size: 12px; color: var(--muted); line-height: 1.7;
+    font-variant-numeric: tabular-nums; min-width: 150px; }
+  #info b { color: var(--text); font-weight: 500; }
+
+  @media (max-width: 640px) {
+    #hud { width: auto; right: 16px; }
+    #hud p { display: none; }
+    #info { display: none; }
+    #cam { width: 150px; bottom: 64px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="hud" class="panel">
+  <h1>🌍 手掌地球仪</h1>
+  <p>开启摄像头后，用手势在空中操控地球。未开启时也可用鼠标拖拽、滚轮缩放。</p>
+  <ul class="legend">
+    <li data-g="open"><span class="ico">🖐️</span>张开手掌移动<span class="tip">旋转</span></li>
+    <li data-g="fist"><span class="ico">✊</span>握拳<span class="tip">定住</span></li>
+    <li data-g="pinch"><span class="ico">🤏</span>捏合上下移动<span class="tip">缩放</span></li>
+    <li data-g="two"><span class="ico">🙌</span>双手张开/靠拢<span class="tip">缩放</span></li>
+    <li data-g="point"><span class="ico">☝️</span>竖食指<span class="tip">自转开关</span></li>
+  </ul>
+  <button id="startBtn">开启摄像头手势控制</button>
+</div>
+
+<div id="info" class="panel">
+  <div>经度 <b id="lon">0°</b></div>
+  <div>纬度 <b id="lat">0°</b></div>
+  <div>缩放 <b id="zoom">1.00×</b></div>
+  <div>自转 <b id="spin">开</b></div>
+</div>
+
+<div id="cam" class="panel">
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="status" class="panel"><span class="dot"></span><span id="statusText">鼠标模式 · 点击左上角按钮开启手势</span></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const IMG = 'https://cdn.jsdelivr.net/npm/three-globe@2.31.0/example/img/';
+const MP_WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+/* ---------------- 场景 ---------------- */
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+const BASE_DIST = 3.4;
+camera.position.set(0, 0, BASE_DIST);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 2, 4);
+scene.add(sun);
+
+const loader = new THREE.TextureLoader();
+loader.setCrossOrigin('anonymous');
+const tex = (name, srgb = true) => {
+  const t = loader.load(IMG + name);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return t;
+};
+
+// 地球整体（倾斜 + 旋转都作用在这个组上）
+const globe = new THREE.Group();
+scene.add(globe);
+
+const earth = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 96, 96),
+  new THREE.MeshPhongMaterial({
+    map: tex('earth-blue-marble.jpg'),
+    bumpMap: tex('earth-topology.png', false),
+    bumpScale: 0.04,
+    specularMap: tex('earth-water.png', false),
+    specular: new THREE.Color(0x335577),
+    shininess: 18,
+  })
+);
+globe.add(earth);
+
+// 经纬网
+const grid = new THREE.LineSegments(
+  (() => {
+    const pts = [], r = 1.003;
+    for (let lat = -60; lat <= 60; lat += 30) {
+      const phi = THREE.MathUtils.degToRad(lat);
+      for (let i = 0; i < 128; i++) {
+        const a = (i / 128) * Math.PI * 2, b = ((i + 1) / 128) * Math.PI * 2;
+        pts.push(r * Math.cos(phi) * Math.cos(a), r * Math.sin(phi), r * Math.cos(phi) * Math.sin(a));
+        pts.push(r * Math.cos(phi) * Math.cos(b), r * Math.sin(phi), r * Math.cos(phi) * Math.sin(b));
+      }
+    }
+    for (let lon = 0; lon < 360; lon += 30) {
+      const t = THREE.MathUtils.degToRad(lon);
+      for (let i = 0; i < 64; i++) {
+        const a = -Math.PI / 2 + (i / 64) * Math.PI, b = -Math.PI / 2 + ((i + 1) / 64) * Math.PI;
+        pts.push(r * Math.cos(a) * Math.cos(t), r * Math.sin(a), r * Math.cos(a) * Math.sin(t));
+        pts.push(r * Math.cos(b) * Math.cos(t), r * Math.sin(b), r * Math.cos(b) * Math.sin(t));
+      }
+    }
+    return new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  })(),
+  new THREE.LineBasicMaterial({ color: 0x7fb8ff, transparent: true, opacity: 0.12 })
+);
+globe.add(grid);
+
+// 大气辉光
+const atmosphere = new THREE.Mesh(
+  new THREE.SphereGeometry(1.12, 64, 64),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    vertexShader: `varying vec3 vN; varying vec3 vP;
+      void main(){ vN = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position,1.); vP = mv.xyz; gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `varying vec3 vN; varying vec3 vP;
+      void main(){
+        // 背面法线与视线夹角：地球边缘处最亮，向外逐渐消失
+        float d = dot(vN, normalize(vP));
+        float i = pow(clamp(d / 0.45, 0.0, 1.0), 2.2);
+        gl_FragColor = vec4(0.35, 0.65, 1.0, 1.0) * i * 0.9; }`,
+  })
+);
+scene.add(atmosphere);
+
+// 星空
+{
+  const n = 4000, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const v = new THREE.Vector3().randomDirection().multiplyScalar(80 + Math.random() * 120);
+    pos.set([v.x, v.y, v.z], i * 3);
+  }
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 0.35, sizeAttenuation: true, transparent: true, opacity: 0.8 })));
+}
+
+/* ---------------- 交互状态 ---------------- */
+const state = {
+  rotX: 0.5, rotY: -3.4,    // 当前角度（初始对准中国）
+  velX: 0, velY: 0,         // 角速度（惯性）
+  zoom: 1, targetZoom: 1,
+  autoSpin: true,
+  holding: false,           // 握拳定住 / 鼠标按住
+};
+const ZOOM_MIN = 0.55, ZOOM_MAX = 2.6;
+const clampZoom = z => THREE.MathUtils.clamp(z, ZOOM_MIN, ZOOM_MAX);
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+/* ---------------- 鼠标 / 触摸 ---------------- */
+{
+  let drag = null;
+  canvas.addEventListener('pointerdown', e => {
+    drag = { x: e.clientX, y: e.clientY };
+    state.holding = true; state.velX = state.velY = 0;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const k = 4 / (innerHeight * state.zoom);
+    const dx = (e.clientX - drag.x) * k, dy = (e.clientY - drag.y) * k;
+    state.rotY += dx; state.rotX += dy;
+    state.velY = dx; state.velX = dy;
+    drag = { x: e.clientX, y: e.clientY };
+  });
+  const up = () => { drag = null; state.holding = false; };
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    state.targetZoom = clampZoom(state.targetZoom * Math.exp(-e.deltaY * 0.0012));
+  }, { passive: false });
+}
+
+/* ---------------- 手势识别 ---------------- */
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const octx = overlay.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('statusText');
+const legendItems = [...document.querySelectorAll('.legend li')];
+
+function setStatus(text, cls = '') { statusText.textContent = text; statusEl.className = 'panel ' + cls; }
+function highlight(g) { legendItems.forEach(li => li.classList.toggle('active', li.dataset.g === g)); }
+
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+// 手指是否伸直：指尖到手腕的距离明显大于第二关节到手腕
+function fingerUp(lm, tip, pip) { return dist(lm[tip], lm[0]) > dist(lm[pip], lm[0]) * 1.12; }
+
+function classify(lm) {
+  const palm = dist(lm[0], lm[9]) || 1e-6;          // 手掌尺寸，用于归一化
+  const up = [fingerUp(lm, 8, 6), fingerUp(lm, 12, 10), fingerUp(lm, 16, 14), fingerUp(lm, 20, 18)];
+  const nUp = up.filter(Boolean).length;
+  const pinch = dist(lm[4], lm[8]) / palm;
+  if (pinch < 0.3 && nUp < 4) return 'pinch';
+  if (nUp === 0) return 'fist';
+  if (up[0] && nUp === 1) return 'point';
+  if (nUp >= 3) return 'open';
+  return 'other';
+}
+
+// 手掌中心（手腕 + 四个指根的平均）
+function palmCenter(lm) {
+  const ids = [0, 5, 9, 13, 17];
+  let x = 0, y = 0;
+  for (const i of ids) { x += lm[i].x; y += lm[i].y; }
+  return { x: x / ids.length, y: y / ids.length };
+}
+
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function drawHands(hands, gestures) {
+  const w = overlay.width = overlay.clientWidth * devicePixelRatio;
+  const h = overlay.height = overlay.clientHeight * devicePixelRatio;
+  octx.clearRect(0, 0, w, h);
+  // 视频是 object-fit: cover，按同样方式映射坐标
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const s = Math.max(w / vw, h / vh), ox = (w - vw * s) / 2, oy = (h - vh * s) / 2;
+  const P = p => [p.x * vw * s + ox, p.y * vh * s + oy];
+  hands.forEach((lm, i) => {
+    const color = { open: '#4ade80', fist: '#f87171', pinch: '#fbbf24', point: '#c084fc' }[gestures[i]] || '#93c5fd';
+    octx.strokeStyle = color; octx.lineWidth = 2 * devicePixelRatio;
+    octx.beginPath();
+    for (const [a, b] of HAND_LINKS) { const [x1, y1] = P(lm[a]), [x2, y2] = P(lm[b]); octx.moveTo(x1, y1); octx.lineTo(x2, y2); }
+    octx.stroke();
+    octx.fillStyle = '#fff';
+    for (const p of lm) { const [x, y] = P(p); octx.beginPath(); octx.arc(x, y, 2.2 * devicePixelRatio, 0, Math.PI * 2); octx.fill(); }
+  });
+}
+
+// 每帧手势逻辑所需的历史
+const track = { prev: null, prevGesture: null, pinchStartY: null, pinchStartZoom: 1, twoStartDist: null, twoStartZoom: 1, pointLatch: false, smooth: null };
+
+function handleHands(hands) {
+  const gestures = hands.map(classify);
+  drawHands(hands, gestures);
+
+  if (hands.length === 0) {
+    track.prev = null; track.pinchStartY = null; track.twoStartDist = null; track.smooth = null;
+    state.holding = false;
+    highlight(null);
+    setStatus('摄像头已开启 · 把手放到镜头前', 'warn');
+    return;
+  }
+
+  // 双手：两只手都张开 → 以双手距离缩放
+  if (hands.length >= 2 && gestures[0] !== 'fist' && gestures[1] !== 'fist') {
+    const d = dist(palmCenter(hands[0]), palmCenter(hands[1]));
+    if (track.twoStartDist == null) { track.twoStartDist = d; track.twoStartZoom = state.targetZoom; }
+    state.targetZoom = clampZoom(track.twoStartZoom * (d / track.twoStartDist));
+    state.holding = true; state.velX = state.velY = 0;
+    track.prev = null; track.pinchStartY = null;
+    highlight('two');
+    setStatus(`双手缩放 · ${state.targetZoom.toFixed(2)}×`, 'ok');
+    return;
+  }
+  track.twoStartDist = null;
+
+  const lm = hands[0], g = gestures[0];
+  const c = palmCenter(lm);
+  // 指数平滑，减少抖动
+  track.smooth = track.smooth ? { x: track.smooth.x * 0.5 + c.x * 0.5, y: track.smooth.y * 0.5 + c.y * 0.5 } : c;
+  const cur = track.smooth;
+
+  if (g !== 'point') track.pointLatch = false;
+  if (g !== 'pinch') track.pinchStartY = null;
+
+  switch (g) {
+    case 'open': {
+      state.holding = true;
+      if (track.prev && track.prevGesture === 'open') {
+        // 画面是镜像的：手向右移动时 x 变小
+        const dx = -(cur.x - track.prev.x) * 6.0;
+        const dy = (cur.y - track.prev.y) * 4.0;
+        state.rotY += dx; state.rotX += dy;
+        state.velY = state.velY * 0.5 + dx * 0.5;
+        state.velX = state.velX * 0.5 + dy * 0.5;
+      }
+      highlight('open');
+      setStatus('🖐️ 张开手掌 · 移动手来旋转地球', 'ok');
+      break;
+    }
+    case 'fist':
+      state.holding = true; state.velX = state.velY = 0;
+      highlight('fist');
+      setStatus('✊ 握拳 · 地球已定住', 'ok');
+      break;
+    case 'pinch': {
+      if (track.pinchStartY == null) { track.pinchStartY = cur.y; track.pinchStartZoom = state.targetZoom; }
+      // 向上捏合拉动 → 放大
+      state.targetZoom = clampZoom(track.pinchStartZoom * Math.exp((track.pinchStartY - cur.y) * 3));
+      state.holding = true; state.velX = state.velY = 0;
+      highlight('pinch');
+      setStatus(`🤏 捏合缩放 · ${state.targetZoom.toFixed(2)}×（向上放大，向下缩小）`, 'ok');
+      break;
+    }
+    case 'point':
+      if (!track.pointLatch) { state.autoSpin = !state.autoSpin; track.pointLatch = true; }
+      state.holding = false;
+      highlight('point');
+      setStatus(`☝️ 自转已${state.autoSpin ? '开启' : '关闭'} · 换个手势后可再次切换`, 'ok');
+      break;
+    default:
+      state.holding = false;
+      highlight(null);
+      setStatus('识别中… 试试张开手掌、握拳或捏合', 'warn');
+  }
+  track.prev = cur;
+  track.prevGesture = g;
+}
+
+let landmarker = null;
+async function startHands() {
+  startBtn.disabled = true;
+  startBtn.textContent = '正在加载手势模型…';
+  setStatus('正在加载 MediaPipe 手部模型…', 'warn');
+  try {
+    const { FilesetResolver, HandLandmarker } = await import('@mediapipe/tasks-vision');
+    const fileset = await FilesetResolver.forVisionTasks(MP_WASM);
+    const opts = { baseOptions: { modelAssetPath: MP_MODEL, delegate: 'GPU' }, runningMode: 'VIDEO', numHands: 2,
+      minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5 };
+    try { landmarker = await HandLandmarker.createFromOptions(fileset, opts); }
+    catch { opts.baseOptions.delegate = 'CPU'; landmarker = await HandLandmarker.createFromOptions(fileset, opts); }
+
+    startBtn.textContent = '请允许使用摄像头…';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    document.getElementById('cam').style.display = 'block';
+    startBtn.textContent = '✓ 手势控制已开启';
+    setStatus('摄像头已开启 · 把手放到镜头前', 'warn');
+  } catch (err) {
+    console.error(err);
+    landmarker = null;
+    startBtn.disabled = false;
+    startBtn.textContent = '重试开启摄像头';
+    const msg = err && err.name === 'NotAllowedError' ? '摄像头权限被拒绝' : '手势模块加载失败';
+    setStatus(`${msg} · 仍可用鼠标操作`, 'warn');
+  }
+}
+startBtn.addEventListener('click', startHands);
+
+let lastVideoTime = -1;
+function detect() {
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  const res = landmarker.detectForVideo(video, performance.now());
+  handleHands(res.landmarks || []);
+}
+
+/* ---------------- 渲染循环 ---------------- */
+const lonEl = document.getElementById('lon'), latEl = document.getElementById('lat');
+const zoomEl = document.getElementById('zoom'), spinEl = document.getElementById('spin');
+const clock = new THREE.Clock();
+
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  detect();
+
+  if (!state.holding) {
+    state.rotY += state.velY; state.rotX += state.velX;
+    const damp = Math.pow(0.05, dt);              // 惯性衰减
+    state.velX *= damp; state.velY *= damp;
+    if (state.autoSpin && Math.abs(state.velY) < 0.002) state.rotY += dt * 0.12;
+  }
+  state.rotX = THREE.MathUtils.clamp(state.rotX, -1.3, 1.3);
+
+  globe.rotation.set(state.rotX, state.rotY, 0, 'XYZ');
+  state.zoom += (state.targetZoom - state.zoom) * (1 - Math.pow(0.001, dt));
+  camera.position.z = BASE_DIST / state.zoom;
+
+  // 屏幕中心对应的经纬度（贴图 u=0 在 -180°）
+  const lon = THREE.MathUtils.euclideanModulo(-THREE.MathUtils.radToDeg(state.rotY) - 90 + 180, 360) - 180;
+  const lat = THREE.MathUtils.radToDeg(state.rotX);
+  lonEl.textContent = `${Math.abs(lon).toFixed(1)}° ${lon >= 0 ? 'E' : 'W'}`;
+  latEl.textContent = `${Math.abs(lat).toFixed(1)}° ${lat >= 0 ? 'N' : 'S'}`;
+  zoomEl.textContent = `${state.zoom.toFixed(2)}×`;
+  spinEl.textContent = state.autoSpin ? '开' : '关';
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
