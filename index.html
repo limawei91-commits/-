@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>小小科学馆</title>
+<meta name="description" content="幼儿园中大班 3D 互动科学实验：沉浮、电路、火山、颜色、宇宙。">
+<style>
+/* Layout: 顶部馆名，下面一组实验卡片，手机一列、电脑两到三列 */
+:root{
+  --bg:#f3f1ec;--ink:#17313b;--dim:#5b6f77;--card:#ffffff;--line:rgba(23,49,59,.12);
+  --c1:#2b5fd9;--c2:#ffb21e;--c3:#ff7a3d;--c4:#8b5cf6;--c5:#0f172a;
+  --f:"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f)}
+main{max-width:1080px;margin:0 auto;padding-block:calc(28px + env(safe-area-inset-top,0px)) calc(40px + env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{display:flex;flex-direction:column;gap:6px;margin-bottom:22px}
+h1{margin:0;font-size:clamp(30px,6vw,46px);letter-spacing:.08em;text-wrap:balance}
+header p{margin:0;color:var(--dim);font-size:15px;line-height:1.7}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+a.card{display:flex;flex-direction:column;gap:8px;text-decoration:none;color:inherit;background:var(--card);border-radius:20px;padding:18px 18px 16px;
+  border:1px solid var(--line);position:relative;overflow:hidden;min-width:0;transition:transform .15s,box-shadow .15s}
+a.card:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(23,49,59,.1)}
+a.card:focus-visible{outline:3px solid var(--c1);outline-offset:3px}
+.band{position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--k)}
+.tag{font-size:12px;letter-spacing:.12em;color:var(--k);font-weight:700}
+.card h2{margin:0;font-size:22px;letter-spacing:.06em}
+.card p{margin:0;color:var(--dim);font-size:14px;line-height:1.7}
+.meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.meta span{font-size:12px;background:#f1f4f5;color:var(--dim);border-radius:999px;padding:3px 10px}
+footer{margin-top:26px;color:var(--dim);font-size:13px;line-height:1.8}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>小小科学馆</h1>
+    <p>幼儿园中班、大班的 3D 互动科学实验。点开就能玩，先猜一猜，再动手看结果。<br>建议用电脑或教室一体机打开；手机也能玩，画面会稍慢一些。</p>
+  </header>
+  <div class="grid">
+    <a class="card" href="sink.html" style="--k:var(--c1)"><span class="band"></span><span class="tag">物质 · 浮力</span><h2>沉浮实验室</h2>
+      <p>13 样东西放进水箱，猜一猜是沉还是浮。重的不一定沉，轻的不一定浮。</p><div class="meta"><span>中班</span><span>大班</span><span>约 0.6 MB</span></div></a>
+    <a class="card" href="circuit.html" style="--k:#d99a00"><span class="band"></span><span class="tag">电 · 电路</span><h2>电路实验室</h2>
+      <p>接导线点亮小灯泡，用开关控制它，再测一测哪些东西能导电。</p><div class="meta"><span>中班</span><span>大班</span><span>约 0.6 MB</span></div></a>
+    <a class="card" href="volcano.html" style="--k:var(--c3)"><span class="band"></span><span class="tag">化学 · 反应</span><h2>火山爆发</h2>
+      <p>小苏打遇上白醋，冒出彩色泡沫。换换配方，看喷发有什么不同。</p><div class="meta"><span>中班</span><span>大班</span><span>约 0.6 MB</span></div></a>
+    <a class="card" href="color.html" style="--k:var(--c4)"><span class="band"></span><span class="tag">美术 · 色彩</span><h2>颜色实验室</h2>
+      <p>红黄蓝滴进水里，搅一搅变出新颜色。大班还有调色挑战。</p><div class="meta"><span>中班</span><span>大班</span><span>约 0.6 MB</span></div></a>
+    <a class="card" href="cosmos.html" style="--k:var(--c5)"><span class="band"></span><span class="tag">宇宙 · 天文</span><h2>星空探险馆</h2>
+      <p>黑洞和行星碰撞；点开太阳系的每颗星球，看 NASA 的真实照片和介绍。</p><div class="meta"><span>大班</span><span>约 3.7 MB</span></div></a>
+    <a class="card" href="gargantua.html" style="--k:#b07a3a"><span class="band"></span><span class="tag">宇宙 · 电影</span><h2>卡冈图雅黑洞</h2>
+      <p>电影《星际穿越》里那样的黑洞，实时计算光线被弯曲的样子。</p><div class="meta"><span>欣赏</span><span>需较好显卡</span></div></a>
+  </div>
+  <footer>幼儿园科学区活动资源<br>行星照片来自 NASA（PIA 编号见各星球介绍卡）。</footer>
+</main>
+</body>
+</html>

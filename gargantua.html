@@ -1,0 +1,282 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>卡冈图雅黑洞</title>
+
+
+
+<style>
+/* Layout: 全屏光线追踪画布，左下角片名卡，右下角一组胶片式控制按钮 */
+:root{
+  --void:#030304;
+  --ink:#ece6da;
+  --ink-dim:#9a9286;
+  --ember:#e8a35a;
+  --line:rgba(236,230,218,.18);
+  --glass:rgba(10,9,8,.55);
+  --f-display:"Cormorant Garamond","Noto Serif SC",Georgia,serif;
+  --f-cn:"Noto Serif SC","Songti SC",serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0;background:var(--void);color:var(--ink);overflow:hidden}
+body{touch-action:none;-webkit-user-select:none;user-select:none}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:grab}
+#gl:active{cursor:grabbing}
+.hud{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:0 calc(18px + env(safe-area-inset-bottom,0px));pointer-events:none;
+  background:linear-gradient(to top,rgba(0,0,0,.55),transparent)}
+.card{display:flex;flex-direction:column;gap:4px;padding-top:40px}
+.card h1{margin:0;font-family:var(--f-display);font-weight:500;font-size:clamp(28px,5vw,48px);letter-spacing:.32em;text-transform:uppercase;line-height:1}
+.card .cn{font-family:var(--f-cn);font-size:13px;letter-spacing:.4em;color:var(--ember)}
+.card .meta{font-family:var(--f-mono);font-size:11px;color:var(--ink-dim);letter-spacing:.08em;font-variant-numeric:tabular-nums}
+.ctl{display:flex;gap:8px;flex-wrap:wrap;pointer-events:auto}
+.ctl button{font-family:var(--f-mono);font-size:11px;letter-spacing:.12em;color:var(--ink);background:var(--glass);border:1px solid var(--line);
+  padding:9px 12px;border-radius:2px;cursor:pointer;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+.ctl button[aria-pressed="true"]{border-color:var(--ember);color:var(--ember)}
+.ctl button:focus-visible{outline:1px solid var(--ember);outline-offset:2px}
+.hint{position:fixed;top:calc(16px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);font-family:var(--f-mono);font-size:11px;
+  letter-spacing:.14em;color:var(--ink-dim);transition:opacity 1.2s;pointer-events:none;white-space:nowrap}
+#err{position:fixed;inset:0;display:grid;place-items:center;font-family:var(--f-cn);color:var(--ink-dim);padding:24px;text-align:center}
+</style></head><body>
+
+<canvas id="gl"></canvas>
+<div class="hint" id="hint">拖动旋转视角 · 滚轮或双指缩放</div>
+<div class="hud">
+  <div class="card">
+    <span class="cn">卡 冈 图 雅</span>
+    <h1>Gargantua</h1>
+    <span class="meta" id="meta">r = 18.0 Rs · 倾角 6.0°</span>
+  </div>
+  <div class="ctl">
+    <button id="bMode" aria-pressed="false" title="电影版去掉了多普勒效应，物理版会让一侧更亮">物理版</button>
+    <button id="bOrbit" aria-pressed="true">自动环绕</button>
+    <button id="bQ" aria-pressed="false">高清</button>
+    <button id="bReset">复位镜头</button>
+  </div>
+</div>
+<div id="err" hidden>你的浏览器不支持 WebGL2，无法运行这段光线追踪动画。请换用新版 Chrome、Safari 或 Edge。</div>
+
+<script>
+(()=>{
+const cv=document.getElementById('gl');
+const gl=cv.getContext('webgl2',{antialias:false,alpha:false,powerPreference:'high-performance'});
+if(!gl){document.getElementById('err').hidden=false;return;}
+
+const VS=`#version 300 es
+in vec2 p;out vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0,1);}`;
+
+const SCENE=`#version 300 es
+precision highp float;
+in vec2 uv;out vec4 o;
+uniform vec2 res;uniform float time;uniform vec3 camPos;uniform mat3 camRot;uniform float physics;uniform int steps;
+
+float h31(vec3 p){p=fract(p*.1031);p+=dot(p,p.zyx+31.32);return fract((p.x+p.y)*p.z);}
+float vnoise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+ return mix(mix(mix(h31(i),h31(i+vec3(1,0,0)),f.x),mix(h31(i+vec3(0,1,0)),h31(i+vec3(1,1,0)),f.x),f.y),
+            mix(mix(h31(i+vec3(0,0,1)),h31(i+vec3(1,0,1)),f.x),mix(h31(i+vec3(0,1,1)),h31(i+vec3(1,1,1)),f.x),f.y),f.z);}
+float fbm(vec3 p){float a=.5,s=0.;for(int i=0;i<5;i++){s+=a*vnoise(p);p=p*2.03+vec3(1.7,9.2,3.1);a*=.5;}return s;}
+
+vec3 sky(vec3 d){
+ vec3 c=vec3(0);
+ for(int L=0;L<3;L++){
+  float s=90.+float(L)*140.;
+  vec3 p=d*s;vec3 id=floor(p);vec3 f=fract(p)-.5;
+  float h=h31(id+float(L)*17.);
+  if(h>.965){
+   vec3 off=(vec3(h31(id+1.3),h31(id+2.7),h31(id+4.1))-.5)*.6;
+   float dd=length(f-off);
+   float b=(h-.965)*28.;
+   vec3 tint=mix(vec3(1.,.82,.62),vec3(.7,.82,1.),h31(id+9.));
+   c+=tint*b*smoothstep(.16,0.,dd)*(1.+.3*sin(time*2.+h*60.));
+  }
+ }
+ float n=fbm(d*2.2+vec3(0,0,3.));
+ c+=vec3(.05,.04,.06)*pow(n,3.)*1.6;
+ return c;
+}
+
+const float RIN=2.6, ROUT=13.;
+vec4 disk(vec3 p,vec3 rd){
+ float r=length(p.xz);
+ if(r<RIN||r>ROUT)return vec4(0);
+ float ang=atan(p.z,p.x);
+ float a=ang+time*1.8/pow(r,1.5);
+ vec2 q=vec2(cos(a),sin(a))*r;
+ float n=fbm(vec3(q*1.6,r*.6));
+ float rings=.55+.45*sin(r*9.+n*6.);
+ float streak=fbm(vec3(q*4.,r*3.));
+ float dens=mix(n,rings*streak,.5);
+ float edge=smoothstep(RIN,RIN+.35,r)*(1.-smoothstep(ROUT-5.,ROUT,r));
+ float I=pow(RIN/r,1.6)*edge*(.35+1.1*dens);
+ float t=clamp((r-RIN)/(ROUT-RIN),0.,1.);
+ vec3 hot=vec3(1.,.93,.82),warm=vec3(1.,.62,.28),cool=vec3(.55,.22,.08);
+ vec3 col=mix(hot,warm,smoothstep(0.,.35,t));col=mix(col,cool,smoothstep(.35,1.,t));
+ if(physics>.5){
+  float v=sqrt(.5/(r-1.));v=min(v,.7);
+  vec3 tang=normalize(vec3(-p.z,0.,p.x));
+  float gam=1./sqrt(1.-v*v);
+  float g=1./(gam*(1.-v*dot(tang,-rd)));
+  g*=sqrt(1.-1./r);
+  I*=pow(g,3.);
+  col=mix(col,vec3(.75,.85,1.),clamp(g-1.,0.,.6));
+  col=mix(col,vec3(.8,.25,.05),clamp(1.-g,0.,.7));
+ }
+ float alpha=clamp(I*.9,0.,1.);
+ return vec4(col*I*2.4,alpha);
+}
+
+vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
+
+void main(){
+ vec2 sc=(gl_FragCoord.xy-.5*res)/res.y;
+ vec3 rd=normalize(camRot*vec3(sc*1.05,1.));
+ vec3 pos=camPos,vel=rd;
+ vec3 h=cross(pos,vel);float h2=dot(h,h);
+ vec3 col=vec3(0);float al=0.;bool hole=false;
+ for(int i=0;i<600;i++){
+  if(i>=steps)break;
+  float r2=dot(pos,pos);float r=sqrt(r2);
+  if(r<1.){hole=true;break;}
+  float dt=clamp(.045*r,.02,.9)*(600./float(steps));
+  vec3 acc=-1.5*h2*pos/(r2*r2*r);
+  vec3 prev=pos;
+  vel+=acc*dt;pos+=vel*dt;
+  if(prev.y*pos.y<0.){
+   float t=prev.y/(prev.y-pos.y);
+   vec4 d=disk(mix(prev,pos,t),normalize(vel));
+   col+=(1.-al)*d.rgb*d.a+(1.-al)*d.rgb*.15;
+   al+=(1.-al)*d.a;
+   if(al>.98)break;
+  }
+  if(r>60.&&dot(pos,vel)>0.)break;
+ }
+ if(!hole)col+=(1.-al)*sky(normalize(vel));
+ col=aces(col*1.15);
+ col=pow(col,vec3(.92,.97,1.04));
+ o=vec4(col,1);
+}`;
+
+const POST=`#version 300 es
+precision highp float;
+in vec2 uv;out vec4 o;uniform sampler2D tex;uniform vec2 res;uniform float time;
+float hash(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+void main(){
+ vec3 c=texture(tex,uv).rgb;
+ vec3 b=vec3(0);
+ for(int L=1;L<7;L++){float l=float(L);b+=max(textureLod(tex,uv,l).rgb-.35,0.)*(.9/l);}
+ vec3 s=vec3(0);
+ for(int k=-6;k<=6;k++){float x=float(k)/6.;s+=max(textureLod(tex,uv+vec2(x*.22,0),3.).rgb-.55,0.)*(1.-abs(x));}
+ s*=vec3(.9,.65,.4)*.16;
+ c+=b*.55+s;
+ vec2 q=uv-.5;q.x*=res.x/res.y;
+ c*=1.-.45*smoothstep(.35,1.05,length(q));
+ c+=(hash(uv*res+fract(time)*91.)-.5)*.035;
+ float bars=step(abs(uv.y-.5),.5-.06*step(res.y*1.6,res.x));
+ o=vec4(c*bars,1);
+}`;
+
+function sh(t,s){const x=gl.createShader(t);gl.shaderSource(x,s);gl.compileShader(x);if(!gl.getShaderParameter(x,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(x);return x;}
+function prog(fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,VS));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.bindAttribLocation(p,0,'p');gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw gl.getProgramInfoLog(p);return p;}
+let P1,P2;
+try{P1=prog(SCENE);P2=prog(POST);}catch(e){console.error(e);document.getElementById('err').hidden=false;document.getElementById('err').textContent='着色器编译失败：'+e;return;}
+const vb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+const U=(p,n)=>gl.getUniformLocation(p,n);
+
+const tex=gl.createTexture(),fb=gl.createFramebuffer();
+let W=0,H=0,SW=0,SH=0;
+const mobile=Math.min(innerWidth,innerHeight)<700;
+let hq=false;
+function resize(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  W=Math.floor(innerWidth*dpr);H=Math.floor(innerHeight*dpr);cv.width=W;cv.height=H;
+  const s=hq?(mobile?.75:.9):(mobile?.45:.6);
+  SW=Math.max(2,Math.floor(W*s));SH=Math.max(2,Math.floor(H*s));
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,SW,SH,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);
+}
+addEventListener('resize',resize);resize();
+
+// 镜头
+const DEF={yaw:-0.35,pitch:0.105,dist:18};
+let yaw=DEF.yaw,pitch=DEF.pitch,dist=DEF.dist,tYaw=yaw,tPitch=pitch,tDist=dist;
+let orbit=true,physics=false;
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduce)orbit=false;
+
+let drag=null;const pts=new Map();
+const hint=document.getElementById('hint');
+function hideHint(){hint.style.opacity=0;}
+setTimeout(hideHint,6000);
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);pts.set(e.pointerId,{x:e.clientX,y:e.clientY});hideHint();});
+cv.addEventListener('pointermove',e=>{
+  if(!pts.has(e.pointerId))return;
+  const prev=pts.get(e.pointerId);
+  if(pts.size===1){
+    tYaw-= (e.clientX-prev.x)*0.005;
+    tPitch=Math.max(-1.3,Math.min(1.3,tPitch+(e.clientY-prev.y)*0.004));
+  }else if(pts.size===2){
+    const [a,b]=[...pts.values()];
+    const d0=Math.hypot(a.x-b.x,a.y-b.y);
+    pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    const [c,d]=[...pts.values()];
+    const d1=Math.hypot(c.x-d.x,c.y-d.y);
+    if(d0>0)tDist=Math.max(6,Math.min(40,tDist*d0/d1));
+    return;
+  }
+  pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+});
+const up=e=>pts.delete(e.pointerId);
+cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+cv.addEventListener('wheel',e=>{e.preventDefault();tDist=Math.max(6,Math.min(40,tDist*Math.exp(e.deltaY*0.001)));hideHint();},{passive:false});
+
+const bMode=document.getElementById('bMode'),bOrbit=document.getElementById('bOrbit'),bQ=document.getElementById('bQ');
+bOrbit.setAttribute('aria-pressed',orbit);
+bMode.onclick=()=>{physics=!physics;bMode.setAttribute('aria-pressed',physics);};
+bOrbit.onclick=()=>{orbit=!orbit;bOrbit.setAttribute('aria-pressed',orbit);};
+bQ.onclick=()=>{hq=!hq;bQ.setAttribute('aria-pressed',hq);resize();};
+document.getElementById('bReset').onclick=()=>{tYaw=DEF.yaw;tPitch=DEF.pitch;tDist=DEF.dist;};
+const meta=document.getElementById('meta');
+
+let last=performance.now(),t0=last,metaT=0;
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(orbit)tYaw+=dt*0.035;
+  const k=1-Math.exp(-dt*5);
+  yaw+=(tYaw-yaw)*k;pitch+=(tPitch-pitch)*k;dist+=(tDist-dist)*k;
+  const cp=[dist*Math.cos(pitch)*Math.sin(yaw),dist*Math.sin(pitch),-dist*Math.cos(pitch)*Math.cos(yaw)];
+  // look-at origin, slight roll like the film
+  const f=cp.map(v=>-v/dist);
+  const roll=0.06;
+  let r=[f[2],0,-f[0]];const rl=Math.hypot(r[0],r[2])||1;r=r.map(v=>v/rl);
+  let u=[f[1]*r[2]-f[2]*r[1],f[2]*r[0]-f[0]*r[2],f[0]*r[1]-f[1]*r[0]];
+  const cr=Math.cos(roll),sr=Math.sin(roll);
+  const r2=r.map((v,i)=>v*cr+u[i]*sr),u2=u.map((v,i)=>u[i]*cr-r[i]*sr);
+  const rot=new Float32Array([-r2[0],-r2[1],-r2[2],u2[0],u2[1],u2[2],f[0],f[1],f[2]]);
+  const time=(now-t0)/1000*(reduce?0.2:1);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER,fb);gl.viewport(0,0,SW,SH);
+  gl.useProgram(P1);
+  gl.uniform2f(U(P1,'res'),SW,SH);gl.uniform1f(U(P1,'time'),time);
+  gl.uniform3fv(U(P1,'camPos'),cp);gl.uniformMatrix3fv(U(P1,'camRot'),false,rot);
+  gl.uniform1f(U(P1,'physics'),physics?1:0);gl.uniform1i(U(P1,'steps'),hq?600:(mobile?260:380));
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+  gl.bindTexture(gl.TEXTURE_2D,tex);gl.generateMipmap(gl.TEXTURE_2D);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);
+  gl.useProgram(P2);
+  gl.uniform1i(U(P2,'tex'),0);gl.uniform2f(U(P2,'res'),W,H);gl.uniform1f(U(P2,'time'),time);
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+
+  if(now-metaT>200){metaT=now;meta.textContent=`r = ${dist.toFixed(1)} Rs · 倾角 ${(pitch*180/Math.PI).toFixed(1)}°`;}
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body></html>
